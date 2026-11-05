@@ -11,3 +11,6 @@ node_modules/
 dist/
 *.tsbuildinfo
 .agent-runs/
+
+# CDK lookup cache: contains the account id
+infra/cdk.context.json
