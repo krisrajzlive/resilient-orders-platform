@@ -1,4 +1,4 @@
-"""Catalog API: search, grounded answers and photo search over catalog_core.
+"""Orders Platform API: catalog search, grounded answers, photo search and the order-saga workflow.
 
 Chaos switch (local development only, disabled with CHAOS_ENABLED=0): send the header
   X-Chaos: embedding-down | db-down | llm-down
@@ -15,19 +15,16 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict
-from pydantic.alias_generators import to_camel
 
 from catalog_core.config import Settings, load_settings
 from catalog_core.rag import CatalogRag
 from catalog_core.search import CatalogSearch, SearchHit
 
+from . import saga
+from .common import Camel
+
 ROOT = Path(__file__).resolve().parents[2]
 POPULAR_IDS = ["P013", "P001", "P003", "P010", "P027"]
-
-
-class Camel(BaseModel):
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
 
 class HitOut(Camel):
@@ -128,14 +125,27 @@ class Deps:
         from catalog_core.multimodal.nova import NovaMultimodalEmbedder
         return NovaMultimodalEmbedder(self.settings)
 
+    @cached_property
+    def saga(self) -> saga.SagaGateway | None:
+        """The deployed order saga, or None when no stack outputs are available."""
+        path = Path(os.environ.get("SAGA_OUTPUTS", ROOT / "deploy-outputs.local.json"))
+        try:
+            outputs = next(iter(json.loads(path.read_text("utf-8")).values()))
+            import boto3
+            session = boto3.Session(profile_name=self.settings.profile, region_name="us-east-1")
+            return saga.SagaGateway(session, outputs["StateMachineArn"], outputs["ReviewQueueUrl"])
+        except Exception:      # no outputs file, bad profile, malformed outputs: run without the workflow
+            return None
+
 
 def create_app(deps: Deps | None = None) -> FastAPI:
     deps = deps or Deps(load_settings())
     chaos_enabled = os.environ.get("CHAOS_ENABLED", "1") != "0"
-    app = FastAPI(title="Catalog API", version="0.1.0")
+    app = FastAPI(title="Orders Platform API", version="0.2.0")
     app.add_middleware(
         CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
         allow_methods=["*"], allow_headers=["*"])
+    saga.register(app, lambda: deps.saga)
 
     def chaos_of(value: str | None) -> str | None:
         return value if chaos_enabled and value in {"embedding-down", "db-down", "llm-down"} else None
@@ -147,10 +157,13 @@ def create_app(deps: Deps | None = None) -> FastAPI:
 
     @app.get("/api/health")
     def health():
+        connected = deps.saga is not None
         try:
-            return {"status": "ok", "products": deps.store.count(), "chaosEnabled": chaos_enabled}
+            return {"status": "ok", "products": deps.store.count(), "chaosEnabled": chaos_enabled,
+                    "sagaConnected": connected}
         except Exception as exc:
-            return {"status": "degraded", "error": type(exc).__name__, "chaosEnabled": chaos_enabled}
+            return {"status": "degraded", "error": type(exc).__name__, "chaosEnabled": chaos_enabled,
+                    "sagaConnected": connected}
 
     @app.get("/api/search", response_model=SearchOut, response_model_by_alias=True)
     def search(q: str = Query(min_length=1, max_length=300), mode: str = "hybrid",
