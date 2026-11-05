@@ -1,0 +1,10 @@
+[
+  {"arn": "simulated-1", "service": "LAMBDA", "eventTypeCode": "AWS_LAMBDA_OPERATIONAL_ISSUE", "region": "us-east-1",
+   "statusCode": "open", "description": "Elevated invocation error rates and cold-start latency for functions in us-east-1."},
+  {"arn": "simulated-2", "service": "BEDROCK", "eventTypeCode": "AWS_BEDROCK_OPERATIONAL_ISSUE", "region": "us-east-1",
+   "statusCode": "open", "description": "Throttling and elevated latency for Anthropic models invoked through cross-region inference profiles."},
+  {"arn": "simulated-3", "service": "DYNAMODB", "eventTypeCode": "AWS_DYNAMODB_MAINTENANCE_SCHEDULED", "region": "us-east-1",
+   "statusCode": "upcoming", "description": "Scheduled maintenance; no customer action expected, brief elevated latency possible."},
+  {"arn": "simulated-4", "service": "RDS", "eventTypeCode": "AWS_RDS_PLANNED_LIFECYCLE_EVENT", "region": "us-east-1",
+   "statusCode": "upcoming", "description": "Engine minor version end of support in 60 days; upgrade recommended."}
+]
