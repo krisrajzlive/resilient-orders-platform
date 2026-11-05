@@ -1,0 +1,6 @@
+{"ts": "2026-11-05T16:39:06+00:00", "runId": "run-20261105-220905-2b79", "kind": "run_started", "request": "Run a disaster recovery drill: database failover and restore from backup"}
+{"ts": "2026-11-05T16:39:10+00:00", "runId": "run-20261105-220905-2b79", "kind": "model_call", "schema": "Route", "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+{"ts": "2026-11-05T16:39:10+00:00", "runId": "run-20261105-220905-2b79", "kind": "route", "route": "dr", "source": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+{"ts": "2026-11-05T16:39:48+00:00", "runId": "run-20261105-220905-2b79", "kind": "tool_call", "agent": "dr", "tool": "dr_preflight", "args": {}, "writes": false, "approved": null}
+{"ts": "2026-11-05T16:39:48+00:00", "runId": "run-20261105-220905-2b79", "kind": "dr_blocked", "reason": "the DR database stack is not deployed or not readable (ValidationError)"}
+{"ts": "2026-11-05T16:39:48+00:00", "runId": "run-20261105-220905-2b79", "kind": "run_finished", "status": "blocked", "report": "D:\\workspace\\resilient-orders-platform\\docs\\results\\agent-runs\\run-20261105-220905-2b79.md"}

@@ -1,7 +1,8 @@
-"""Supervisor graph: route a request to the chaos, triage or drift agent.
+"""Supervisor graph: route a request to the chaos, triage, drift or disaster-recovery agent.
 
 Safety properties (enforced in code, covered by tests):
-  * the chaos agent cannot start any execution until a human approves the plan (graph interrupt);
+  * the chaos and DR agents cannot start anything until a human approves the plan (graph interrupt);
+  * the DR agent refuses to plan when the database is not deployed, and always ends with a billing check;
   * each agent has its own tool allowlist, and write tools need an approval flag;
   * the model proposes, deterministic invariants judge, and every step is audited;
   * if no model is reachable every agent still produces a (rule-based) result.
@@ -19,8 +20,10 @@ from langgraph.types import interrupt
 
 from . import report
 from .audit import AuditLog
+from .dr.engine import DRILLS, TARGETS
+from .dr.tools import EST_COST_USD
 from .llm import (
-    DriftReport, ExperimentPlan, LLMUnavailable, Narrative, Proposal, Route, StructuredLLM,
+    DrPlan, DriftReport, ExperimentPlan, LLMUnavailable, Narrative, Proposal, Route, StructuredLLM,
     TriageItem, TriageReport,
 )
 from .scenarios import CATALOG, evaluate
@@ -33,6 +36,13 @@ ALLOWED = {
     "chaos": {"describe_stack", "get_alarm_states", "start_saga", "wait_saga"},
     "triage": {"describe_stack", "get_alarm_states", "get_health_events"},
     "drift": {"describe_stack", "get_alarm_states", "check_policies"},
+    "dr": {"dr_preflight", "run_drill", "cost_check"},
+}
+
+DRILL_DESCRIPTIONS = {
+    "az_failover": "Force the Multi-AZ database to fail over to its standby while writes continue; measure the outage and lost writes.",
+    "backup_restore": "Back up the live database, restore it to a temporary instance, and verify the data and vector search.",
+    "region_restore": "Copy the backup to the second region, restore there, and verify the data (simulates losing a region).",
 }
 
 
@@ -61,6 +71,8 @@ class AgentState(TypedDict, total=False):
     findings: list[dict]
     health: dict
     narrative: dict
+    drills: list[dict]
+    cost_after: dict
     models_used: Annotated[list[str], operator.add]
     report_path: str
     status: str
@@ -72,11 +84,17 @@ class Deps:
     llm: StructuredLLM | None
     audit: AuditLog
     report_dir: Path
+    dr: Any = None                 # RealDrTools or a stub: preflight(), run_drill(name), cost_check()
 
 
 def _registry(deps: Deps, agent: str, run_id: str) -> ToolRegistry:
     a = deps.aws
-    tools = [
+    dr_tools = [] if deps.dr is None else [
+        Tool("dr_preflight", "Check the DR database is deployed and healthy; list what is billing.", deps.dr.preflight),
+        Tool("run_drill", "Run one disaster-recovery drill (changes real infrastructure).", deps.dr.run_drill, writes=True),
+        Tool("cost_check", "List resources that bill by the hour in both regions.", deps.dr.cost_check),
+    ]
+    tools = [*dr_tools,
         Tool("describe_stack", "List resources in the order-saga stack.", a.describe_stack),
         Tool("get_alarm_states", "Read CloudWatch alarm states.", a.get_alarm_states),
         Tool("get_health_events", "Read AWS Health events (simulated if unavailable).", a.get_health_events),
@@ -101,6 +119,7 @@ def _ask(deps: Deps, state: AgentState, schema, prompt: str):
 
 
 _KEYWORDS = {
+    "dr": r"disaster|\bdr\b|failover|fail over|restore|backup|\brto\b|\brpo\b|region loss|lose a region|multi-az",
     "chaos": r"chaos|fault|failure|fail|experiment|resilien|inject|break|outage test",
     "drift": r"drift|config|complian|polic|audit|misconfig|best practice",
     "triage": r"health|event|incident|alarm|alert|status|triage|outage",
@@ -108,7 +127,7 @@ _KEYWORDS = {
 
 
 def _keyword_route(text: str) -> str:
-    for agent in ("chaos", "drift", "triage"):
+    for agent in ("dr", "chaos", "drift", "triage"):
         if re.search(_KEYWORDS[agent], text.lower()):
             return agent
     return "triage"
@@ -120,7 +139,8 @@ def build_graph(deps: Deps, checkpointer):
         out, model = _ask(deps, state, Route,
                           "Pick the agent for this operations request. chaos = run failure experiments against "
                           "the order workflow; triage = assess AWS events and alarms; drift = audit configuration "
-                          f"against best practice.\nRequest: {state['request']}")
+                          "against best practice; dr = disaster-recovery drills on the database (failover, "
+                          f"backup restore, region loss).\nRequest: {state['request']}")
         route = out.agent if out else _keyword_route(state["request"])
         deps.audit.record(state["run_id"], "route", route=route, source=model or "keywords")
         return {"route": route, "models_used": [model] if model else []}
@@ -168,6 +188,8 @@ def build_graph(deps: Deps, checkpointer):
             executions.append({"scenario": name, **summary})
             v = evaluate(CATALOG[name], summary)
             verdicts.append({"scenario": v.scenario, "passed": v.passed, "failures": v.failures})
+            deps.audit.record(state["run_id"], "scenario_result", scenario=name, passed=v.passed,
+                              failures=v.failures, status=summary.get("status"), outcome=summary.get("outcome"))
         alarms = reg.call("get_alarm_states")
         return {"executions": executions, "verdicts": verdicts,
                 "narrative": {"summary": "", "recommendations": [], "alarms": alarms}}
@@ -244,16 +266,103 @@ def build_graph(deps: Deps, checkpointer):
         return {"findings": findings, "narrative": narrative, "report_path": str(path), "status": "completed",
                 "models_used": [model] if model else []}
 
+    # ---- disaster-recovery agent ------------------------------------------------------------
+    def dr_plan(state: AgentState) -> dict:
+        if deps.dr is None:
+            pre = {"ok": False, "reason": "disaster-recovery tooling is not configured", "hint": "",
+                   "billable": {"billable": [], "perHour": 0}}
+        else:
+            pre = _registry(deps, "dr", state["run_id"]).call("dr_preflight")
+        if not pre["ok"]:
+            deps.audit.record(state["run_id"], "dr_blocked", reason=pre["reason"])
+            return {"plan": {"hypothesis": "", "source": "none", "drills": [],
+                             "blocked": {"reason": pre["reason"], "hint": pre.get("hint", "")}},
+                    "status": "blocked"}
+        catalog = "\n".join(f"- {n}: {d}" for n, d in DRILL_DESCRIPTIONS.items())
+        out, model = _ask(deps, state, DrPlan,
+                          "Plan disaster-recovery drills for a PostgreSQL order database (Multi-AZ, with backups copied "
+                          f"to a second region). Choose drills ONLY from this catalog:\n{catalog}\n"
+                          f"Operator request: {state['request']}")
+        chosen = [d for d in (out.drills if out else []) if d in DRILLS]            # drop invented names
+        if not chosen:
+            text = state["request"].lower()
+            chosen = [d for d, pat in (("az_failover", r"failover|fail over|\baz\b|zone|multi-az"),
+                                       ("backup_restore", r"backup|restore|rpo"),
+                                       ("region_restore", r"region")) if re.search(pat, text)] or list(DRILLS)
+        drills = [d for d in DRILLS if d in chosen]       # canonical order: region restore reuses the restore drill's backup
+        billable = pre["billable"]
+        plan = {"hypothesis": out.hypothesis if out else "The database survives losing a zone and can be restored, in the same region and in another, within the targets.",
+                "rationale": out.rationale if out else "Rule-based plan (no model reachable).",
+                "drills": drills, "source": model or "rules", "targets": {d: TARGETS[d] for d in drills},
+                "estimatedCostUsd": round(sum(EST_COST_USD[d] for d in drills), 2),
+                "billingNow": {"items": len(billable["billable"]), "perHour": billable["perHour"]},
+                "database": pre.get("database")}
+        deps.audit.record(state["run_id"], "plan", **{k: v for k, v in plan.items() if k != "rationale"})
+        return {"plan": plan, "models_used": [model] if model else []}
+
+    def dr_approve(state: AgentState) -> dict:
+        decision = interrupt({"type": "approval_required", "action": "run_dr_drills", "plan": state["plan"]})
+        approved = bool(decision.get("approved")) if isinstance(decision, dict) else bool(decision)
+        note = decision.get("note", "") if isinstance(decision, dict) else ""
+        deps.audit.record(state["run_id"], "approval", approved=approved, note=note, drills=state["plan"]["drills"])
+        return {"approved": approved, "approval_note": note}
+
+    def dr_execute(state: AgentState) -> dict:
+        reg = _registry(deps, "dr", state["run_id"])
+        results: list[dict] = []
+        try:
+            for name in state["plan"]["drills"]:
+                try:
+                    outcome = reg.call("run_drill", approved=state["approved"], name=name)
+                except ToolDenied:
+                    raise
+                except Exception as exc:        # an unexpected error: stop, so a broken setup is not repeated at a cost
+                    outcome = {"drill": name, "passed": False, "failures": [f"drill aborted: {type(exc).__name__}"],
+                               "metrics": {}, "target_seconds": TARGETS.get(name)}
+                    results.append(outcome)
+                    deps.audit.record(state["run_id"], "drill_result", **outcome)
+                    break
+                results.append(outcome)
+                # Written to the audit file the moment the drill ends: a run that is stopped or killed later
+                # (the final report is only written at the end) must not lose results already measured.
+                deps.audit.record(state["run_id"], "drill_result", **outcome)
+        finally:
+            cost_after = reg.call("cost_check")      # always prove what is still billing
+        return {"drills": results, "cost_after": cost_after}
+
+    def dr_report(state: AgentState) -> dict:
+        if state.get("status") == "blocked":
+            path = report.write_report(deps.report_dir, state["run_id"], report.render_dr(state))
+            return {"report_path": str(path), "status": "blocked"}
+        facts = "\n".join(f"- {d['drill']}: {'passed' if d['passed'] else 'FAILED'} metrics={d['metrics']} problems={d['failures']}"
+                          for d in state["drills"])
+        out, model = _ask(deps, state, Narrative,
+                          "Summarize these disaster-recovery drill results for an engineer in 2-3 sentences and give up to "
+                          f"3 concrete recommendations. Hypothesis: {state['plan']['hypothesis']}\nResults:\n{facts}")
+        failed = [d for d in state["drills"] if not d["passed"]]
+        narrative = {"summary": out.summary if out else f"{len(state['drills']) - len(failed)} of {len(state['drills'])} drills met their targets.",
+                     "recommendations": out.recommendations if out else
+                     [f"Investigate {d['drill']}: {'; '.join(d['failures'])}" for d in failed] or ["All drills met their targets; repeat them after any infrastructure change."]}
+        new = {**state, "narrative": narrative}
+        path = report.write_report(deps.report_dir, state["run_id"], report.render_dr(new))
+        return {"narrative": narrative, "report_path": str(path), "status": "completed",
+                "models_used": [model] if model else []}
+
     g = StateGraph(AgentState)
     for name, fn in [("route_request", route_request), ("chaos_plan", chaos_plan), ("chaos_approve", chaos_approve),
                      ("chaos_execute", chaos_execute), ("chaos_report", chaos_report), ("cancelled", cancelled),
-                     ("triage_run", triage_run), ("drift_run", drift_run)]:
+                     ("triage_run", triage_run), ("drift_run", drift_run),
+                     ("dr_plan", dr_plan), ("dr_approve", dr_approve), ("dr_execute", dr_execute), ("dr_report", dr_report)]:
         g.add_node(name, fn)
     g.add_edge(START, "route_request")
-    g.add_conditional_edges("route_request", lambda s: {"chaos": "chaos_plan", "triage": "triage_run", "drift": "drift_run"}[s["route"]])
+    g.add_conditional_edges("route_request", lambda s: {"chaos": "chaos_plan", "triage": "triage_run",
+                                                         "drift": "drift_run", "dr": "dr_plan"}[s["route"]])
     g.add_edge("chaos_plan", "chaos_approve")
     g.add_conditional_edges("chaos_approve", lambda s: "chaos_execute" if s["approved"] else "cancelled")
     g.add_edge("chaos_execute", "chaos_report")
-    for end in ("chaos_report", "cancelled", "triage_run", "drift_run"):
+    g.add_conditional_edges("dr_plan", lambda s: "dr_report" if s.get("status") == "blocked" else "dr_approve")
+    g.add_conditional_edges("dr_approve", lambda s: "dr_execute" if s["approved"] else "cancelled")
+    g.add_edge("dr_execute", "dr_report")
+    for end in ("chaos_report", "cancelled", "triage_run", "drift_run", "dr_report"):
         g.add_edge(end, END)
     return g.compile(checkpointer=checkpointer)

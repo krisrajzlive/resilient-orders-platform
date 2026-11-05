@@ -32,7 +32,8 @@ class ToolRegistry:
         self.allowed = frozenset(allowed)
         self.audit, self.run_id, self.agent = audit, run_id, agent
 
-    def call(self, name: str, *, approved: bool = False, **kwargs) -> Any:
+    def call(self, name: str, /, *, approved: bool = False, **kwargs) -> Any:
+        # `name` is positional-only so a tool may itself take an argument called `name`.
         tool = self._tools.get(name)
         if tool is None or name not in self.allowed:
             self.audit.record(self.run_id, "tool_denied", agent=self.agent, tool=name, reason="not on allowlist")

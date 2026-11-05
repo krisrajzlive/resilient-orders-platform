@@ -14,9 +14,16 @@ class LLMUnavailable(Exception):
 
 
 class Route(BaseModel):
-    agent: Literal["chaos", "triage", "drift"] = Field(
-        description="chaos: run failure experiments. triage: assess AWS events/alarms. drift: audit configuration.")
+    agent: Literal["chaos", "triage", "drift", "dr"] = Field(
+        description="chaos: run failure experiments on the order workflow. triage: assess AWS events/alarms. "
+                    "drift: audit configuration. dr: disaster-recovery drills on the database (failover, restore, region loss).")
     reason: str
+
+
+class DrPlan(BaseModel):
+    drills: list[str] = Field(description="Drill names chosen ONLY from the provided catalog, in a sensible order.")
+    hypothesis: str = Field(description="One sentence: what recovery behaviour the drills should confirm.")
+    rationale: str
 
 
 class ExperimentPlan(BaseModel):

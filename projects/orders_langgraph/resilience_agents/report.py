@@ -62,6 +62,38 @@ def render_drift(state: dict) -> str:
     return "\n".join(out) + "\n"
 
 
+def render_dr(state: dict) -> str:
+    plan, n = state["plan"], state.get("narrative", {})
+    head = [f"# Disaster-recovery drills `{state['run_id']}`", "", f"**Request:** {state['request']}", ""]
+    if state.get("status") == "blocked":
+        return "\n".join(head + ["## Not run", "", plan["blocked"]["reason"], "",
+                                 f"To create the environment: `{plan['blocked'].get('hint', '')}`", "",
+                                 "No drill was started and nothing was changed.", ""])
+    rows = []
+    for d in state.get("drills", []):
+        m = d["metrics"]
+        rto = m.get("rto_seconds_including_copy", m.get("rto_seconds", "-"))
+        lost = m.get("lost_writes", m.get("writes_after_backup_lost", "-"))
+        rows.append([d["drill"], "PASS" if d["passed"] else "FAIL", f"{rto}s" if rto != "-" else "-",
+                     f"{d['target_seconds']}s" if d.get("target_seconds") else "-", lost, "; ".join(d["failures"]) or "-"])
+    cost = state.get("cost_after", {})
+    left = cost.get("billable", [])
+    passed = sum(1 for d in state.get("drills", []) if d["passed"])
+    return "\n".join(head + [
+        f"**Hypothesis:** {plan['hypothesis']}", "",
+        f"**Plan source:** {plan['source']} | **Approved by:** human ({state.get('approval_note') or 'no note'})", "",
+        f"## Result: {passed}/{len(state.get('drills', []))} drills met their targets", "",
+        _table(["Drill", "Verdict", "RTO", "Target", "Writes lost", "Problems"], rows),
+        "RTO is the time until the database answered correctly again; writes lost are acknowledged writes missing "
+        "after recovery (a restore necessarily loses everything after its recovery point).", "",
+        "## Summary", "", n.get("summary", ""), "", "## Recommendations", "",
+        *[f"- {r}" for r in n.get("recommendations", [])], "",
+        "## Billing check after the run", "",
+        (f"**Still billing:** {', '.join(i['service'] + ' ' + i['resource'] for i in left)} (about ${cost.get('perHour', 0):.3f}/hour). "
+         "Destroy the DR stacks when finished." if left else "Nothing billable is running."), "",
+        f"Models used: {', '.join(dict.fromkeys(state.get('models_used', []))) or 'none (rules only)'}", ""])
+
+
 def write_report(report_dir: Path, run_id: str, body: str) -> Path:
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"{run_id}.md"

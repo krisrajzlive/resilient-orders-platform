@@ -12,6 +12,7 @@ from catalog_core.models import build_chat_models
 
 from .audit import AuditLog
 from .aws_tools import AwsTools
+from .dr.tools import RealDrTools
 from .graph import Deps
 from .llm import StructuredLLM
 from .runner import new_run_id, run
@@ -21,10 +22,18 @@ ROOT = Path(__file__).resolve().parents[3]
 
 def prompt_for_approval(payload: dict) -> dict:
     plan = payload["plan"]
-    print("\n=== Approval required: run chaos experiment ===")
-    print(f"Hypothesis : {plan['hypothesis']}")
-    print(f"Scenarios  : {', '.join(plan['scenarios'])}")
-    print(f"Executions : {len(plan['scenarios'])} (max {plan['maxExecutions']}), est. cost ${plan['estimatedCostUsd']:.2f}")
+    if payload["action"] == "run_dr_drills":
+        print("\n=== Approval required: run disaster-recovery drills (changes real infrastructure) ===")
+        print(f"Hypothesis : {plan['hypothesis']}")
+        print(f"Drills     : {', '.join(plan['drills'])}")
+        print(f"Targets    : {', '.join(f'{d} <= {s}s' for d, s in plan['targets'].items())}")
+        print(f"Estimated  : ${plan['estimatedCostUsd']:.2f} for the drills; billing right now: "
+              f"{plan['billingNow']['items']} item(s), ${plan['billingNow']['perHour']:.3f}/hour")
+    else:
+        print("\n=== Approval required: run chaos experiment ===")
+        print(f"Hypothesis : {plan['hypothesis']}")
+        print(f"Scenarios  : {', '.join(plan['scenarios'])}")
+        print(f"Executions : {len(plan['scenarios'])} (max {plan['maxExecutions']}), est. cost ${plan['estimatedCostUsd']:.2f}")
     answer = input("Approve? [y/N] ").strip().lower()
     return {"approved": answer in {"y", "yes"}, "note": "approved interactively" if answer in {"y", "yes"} else "declined"}
 
@@ -44,7 +53,7 @@ def main() -> None:
     out_dir = ROOT / "docs" / "results" / "agent-runs"
     llm = None if a.no_llm else StructuredLLM(build_chat_models(load_settings()))
     deps = Deps(aws=AwsTools(session, outputs["StateMachineArn"]), llm=llm,
-                audit=AuditLog(out_dir / f"{run_id}.audit.jsonl"), report_dir=out_dir)
+                audit=AuditLog(out_dir / f"{run_id}.audit.jsonl"), report_dir=out_dir, dr=RealDrTools(session))
     approve = (lambda p: {"approved": True, "note": "auto-approved with --yes"}) if a.yes else prompt_for_approval
 
     result = run(a.request, deps, approve, db_path=ROOT / ".agent-runs" / "checkpoints.sqlite", run_id=run_id)
