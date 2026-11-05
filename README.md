@@ -16,7 +16,7 @@ and the numbers in [Results](#results) come from those runs.
 | Multimodal search (text and photo, LlamaIndex router) | Built, evaluated |
 | Order saga on Step Functions + Lambda | Built, tested locally, **deployed and exercised on AWS** |
 | Resilience agents on LangGraph (chaos, triage, drift) | Built, **run live against the deployed saga** |
-| React console (Redux Toolkit, XState) | Built, verified in a browser |
+| React console (Redux Toolkit, XState) | Built, verified in a browser; **runs orders on the deployed workflow in AWS**, including the human-review step |
 | Auto Scaling, ALB, ECS/Fargate, API Gateway | Not built yet |
 | RDS/Aurora Multi-AZ, backup and restore, disaster recovery drills | Not built yet |
 | CloudFront, AWS Config | Not built yet |
@@ -125,6 +125,13 @@ lifecycle (retry with backoff, a degraded state, latest query wins) and the orde
 names as the Step Functions workflow. A fault-injection selector sends a header that makes the local API fail a
 dependency, so degraded behaviour is visible in the browser.
 
+The **Order saga** tab runs real executions of the deployed workflow through the local API: choose an amount
+and how each step behaves, start the order, and watch the steps, retry counts, the AI risk assessment and the
+states visited come from the live execution history. A high-risk order pauses at the human-review step, and the
+Approve and Reject buttons deliver your decision to the waiting workflow. A second XState machine drives that
+lifecycle (polling, review pause, decision delivery, bounded retries on failed polls). A *Simulated* mode runs the
+same lifecycle in the browser when no AWS workflow is connected.
+
 ## Resilience patterns and where they are tested
 
 | Pattern | Where | Test |
@@ -186,6 +193,12 @@ uvicorn services.catalog_api.app:app --port 8000
 cd apps/dashboard && npm install && npm run dev       # http://127.0.0.1:5173, proxies /api to the service
 ```
 
+The search tabs need the local database (`docker compose up -d`) and Bedrock access. The **Order saga** tab runs on AWS
+once the stack is deployed (next section): the API reads `deploy-outputs.local.json` from the repository root,
+uses the `AWS_PROFILE` from `.env`, and the tab then opens in *On AWS* mode. Without that file it shows *AWS
+workflow not connected* and the *Simulated* mode still works. To run an order: open **Order saga**, pick *High-value
+order (needs review)* or set an amount, optionally make steps fail, and press **Start order on AWS**.
+
 **Deploy the saga to AWS** (cost is pay-per-use and close to zero when idle)
 
 ```bash
@@ -214,6 +227,8 @@ cd infra && npx cdk destroy --force && cd .. && docker compose down
 - Deploying the saga creates only pay-per-use resources (Step Functions, Lambda, DynamoDB on demand, SQS, SNS,
   CloudWatch). Nothing in the stack bills while idle.
 - The chaos agent runs at most five executions per plan, each costing a fraction of a cent plus one model call.
+- The console API is for local use only: it listens on the loopback address, accepts only the fault shapes the
+  workflow understands, and starts at most 30 executions per hour per process.
 - Anything that starts an execution is gated by a human approval in code, not by instructions to the model.
 - Reports and audit logs redact account ids and ARNs when written.
 
@@ -221,7 +236,7 @@ cd infra && npx cdk destroy --force && cd .. && docker compose down
 
 ```
 apps/dashboard/                React console (Redux Toolkit, XState, Vite)
-services/catalog_api/          FastAPI service over the catalog library
+services/catalog_api/          FastAPI service: catalog search, grounded answers, photo search, order-saga control
 libs/catalog_core/             Hybrid search, cited RAG, multimodal engine, evaluation
 projects/orders_stepfunctions/ Lambda handlers, workflow definition, Step Functions Local tests
 projects/orders_langgraph/     Supervisor and agents, tool registry, audit log
