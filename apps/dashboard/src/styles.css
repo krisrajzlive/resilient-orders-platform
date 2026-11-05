@@ -110,3 +110,8 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 @media (prefers-reduced-motion: no-preference) {
   .node, .hit { transition: border-color 0.15s, background 0.15s; }
 }
+
+.review { border-color: var(--warn); background: var(--warn-bg); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-state { background: var(--muted-bg); color: var(--text); border-radius: 6px; padding: 2px 8px; font-size: 0.8rem; }
+input[type="number"] { width: 140px; }

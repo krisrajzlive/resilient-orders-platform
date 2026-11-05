@@ -7,6 +7,7 @@ import {
   catalogApi, useAskMutation, useVisualSearchMutation,
   type Hit, type SearchMode, type SearchResponse,
 } from "../store/catalogApi";
+import { toError } from "../store/errors";
 import { useAppDispatch, useAppSelector, useAppStore } from "../store/hooks";
 import { rememberQuery, setMode } from "../store/prefsSlice";
 
@@ -15,9 +16,6 @@ const MODES: { value: SearchMode; label: string }[] = [
   { value: "vector", label: "Semantic" },
   { value: "keyword", label: "Keyword" },
 ];
-
-const toError = (e: unknown) =>
-  new Error(typeof e === "object" && e && "status" in e ? `HTTP ${String((e as { status: unknown }).status)}` : String(e));
 
 function HitCard({ hit, cited }: { hit: Hit; cited?: boolean }) {
   return (

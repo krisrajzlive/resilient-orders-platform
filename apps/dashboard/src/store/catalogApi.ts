@@ -36,6 +36,24 @@ export interface HealthResponse {
   status: "ok" | "degraded";
   products?: number;
   chaosEnabled: boolean;
+  sagaConnected: boolean;
+}
+
+export type FaultKind = "transient" | "permanent";
+export type SagaFaults = Partial<Record<string, FaultKind>>;
+
+export interface SagaStatus {
+  name: string;
+  status: "RUNNING" | "SUCCEEDED" | "FAILED" | "TIMED_OUT" | "ABORTED";
+  finished: boolean;
+  outcome?: "CONFIRMED" | "REJECTED" | null;
+  error?: string | null;
+  states: string[];
+  current?: string | null;
+  retries: Record<string, number>;
+  risk?: { level?: string | null; reasons: string[]; source?: string | null } | null;
+  waitingReview: boolean;
+  seconds: number;
 }
 
 export const catalogApi = createApi({
@@ -66,6 +84,14 @@ export const catalogApi = createApi({
       },
     }),
     health: build.query<HealthResponse, void>({ query: () => "health" }),
+    // Order saga on AWS Step Functions (through the local API).
+    startSaga: build.mutation<{ name: string }, { amount: number; faults: SagaFaults }>({
+      query: (body) => ({ url: "saga/executions", method: "POST", body }),
+    }),
+    getSaga: build.query<SagaStatus, string>({ query: (name) => `saga/executions/${name}` }),
+    reviewSaga: build.mutation<{ delivered: boolean }, { name: string; approved: boolean }>({
+      query: ({ name, approved }) => ({ url: `saga/executions/${name}/review`, method: "POST", body: { approved } }),
+    }),
   }),
 });
 
