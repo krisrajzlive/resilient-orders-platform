@@ -1,0 +1,8 @@
+{"ts": "2026-11-05T15:29:43+00:00", "runId": "run-20261105-205942-988e", "kind": "run_started", "request": "Are there any AWS health events or alarms I should worry about?"}
+{"ts": "2026-11-05T15:29:47+00:00", "runId": "run-20261105-205942-988e", "kind": "model_call", "schema": "Route", "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+{"ts": "2026-11-05T15:29:47+00:00", "runId": "run-20261105-205942-988e", "kind": "route", "route": "triage", "source": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+{"ts": "2026-11-05T15:29:48+00:00", "runId": "run-20261105-205942-988e", "kind": "tool_call", "agent": "triage", "tool": "get_health_events", "args": {}, "writes": false, "approved": null}
+{"ts": "2026-11-05T15:29:49+00:00", "runId": "run-20261105-205942-988e", "kind": "tool_call", "agent": "triage", "tool": "describe_stack", "args": {}, "writes": false, "approved": null}
+{"ts": "2026-11-05T15:29:51+00:00", "runId": "run-20261105-205942-988e", "kind": "tool_call", "agent": "triage", "tool": "get_alarm_states", "args": {}, "writes": false, "approved": null}
+{"ts": "2026-11-05T15:30:03+00:00", "runId": "run-20261105-205942-988e", "kind": "model_call", "schema": "TriageReport", "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+{"ts": "2026-11-05T15:30:03+00:00", "runId": "run-20261105-205942-988e", "kind": "run_finished", "status": "completed", "report": "D:\\workspace\\resilient-orders-platform\\docs\\results\\agent-runs\\run-20261105-205942-988e.md"}

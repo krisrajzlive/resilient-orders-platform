@@ -1,0 +1,127 @@
+{
+  "happy_path": {
+    "status": "SUCCEEDED",
+    "outcome": "CONFIRMED",
+    "error": null,
+    "risk": {
+      "reasons": [
+        "within normal limits",
+        "Single item order with reasonable quantity",
+        "Moderate order amount of $120",
+        "No suspicious patterns evident from available data"
+      ],
+      "level": "low",
+      "source": "model:us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    },
+    "seconds": 34.6,
+    "states": [
+      "AssessRisk",
+      "RiskChoice",
+      "ReserveStock",
+      "ChargePayment",
+      "CreateShipment",
+      "MarkConfirmed",
+      "NotifyConfirmed",
+      "OrderConfirmed"
+    ]
+  },
+  "payment_flaky_recovers": {
+    "status": "SUCCEEDED",
+    "outcome": "CONFIRMED",
+    "error": null,
+    "risk": {
+      "reasons": [
+        "within normal limits",
+        "Single item order with reasonable quantity",
+        "Moderate order amount of $120",
+        "No suspicious patterns evident from available data"
+      ],
+      "level": "low",
+      "source": "model:us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    },
+    "seconds": 11.6,
+    "states": [
+      "AssessRisk",
+      "RiskChoice",
+      "ReserveStock",
+      "ChargePayment",
+      "CreateShipment",
+      "MarkConfirmed",
+      "NotifyConfirmed",
+      "OrderConfirmed"
+    ]
+  },
+  "shipping_broken_compensates": {
+    "status": "SUCCEEDED",
+    "outcome": "REJECTED",
+    "error": null,
+    "risk": {
+      "reasons": [
+        "within normal limits",
+        "Single item order with reasonable quantity",
+        "Moderate order amount of $120",
+        "No suspicious patterns evident from available data"
+      ],
+      "level": "low",
+      "source": "model:us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    },
+    "seconds": 18.9,
+    "states": [
+      "AssessRisk",
+      "RiskChoice",
+      "ReserveStock",
+      "ChargePayment",
+      "CreateShipment",
+      "RefundPayment",
+      "ReleaseStock",
+      "MarkRejected",
+      "NotifyRejected",
+      "OrderRejected"
+    ]
+  },
+  "refund_broken_escalates": {
+    "status": "FAILED",
+    "outcome": null,
+    "error": "CompensationFailed",
+    "risk": {},
+    "seconds": 4.6,
+    "states": [
+      "AssessRisk",
+      "RiskChoice",
+      "ReserveStock",
+      "ChargePayment",
+      "CreateShipment",
+      "RefundPayment",
+      "ManualReview",
+      "CompensationFailed"
+    ]
+  },
+  "high_value_needs_review": {
+    "status": "SUCCEEDED",
+    "outcome": "CONFIRMED",
+    "error": null,
+    "risk": {
+      "reasons": [
+        "order value 9000.00 at or above 5000",
+        "High order value of $9,000 for a single item",
+        "Single item purchase with no order history provided to establish legitimacy",
+        "Large transaction amount warrants additional verification"
+      ],
+      "level": "high",
+      "source": "model:us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    },
+    "seconds": 4.2,
+    "states": [
+      "AssessRisk",
+      "RiskChoice",
+      "HumanReview",
+      "ReviewDecision",
+      "ReserveStock",
+      "ChargePayment",
+      "CreateShipment",
+      "MarkConfirmed",
+      "NotifyConfirmed",
+      "OrderConfirmed"
+    ]
+  }
+}

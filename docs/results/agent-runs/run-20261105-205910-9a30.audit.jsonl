@@ -1,0 +1,6 @@
+{"ts": "2026-11-05T15:29:11+00:00", "runId": "run-20261105-205910-9a30", "kind": "run_started", "request": "Audit the order workflow's configuration against best practice"}
+{"ts": "2026-11-05T15:29:15+00:00", "runId": "run-20261105-205910-9a30", "kind": "model_call", "schema": "Route", "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+{"ts": "2026-11-05T15:29:15+00:00", "runId": "run-20261105-205910-9a30", "kind": "route", "route": "drift", "source": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+{"ts": "2026-11-05T15:29:25+00:00", "runId": "run-20261105-205910-9a30", "kind": "tool_call", "agent": "drift", "tool": "check_policies", "args": {}, "writes": false, "approved": null}
+{"ts": "2026-11-05T15:29:40+00:00", "runId": "run-20261105-205910-9a30", "kind": "model_call", "schema": "DriftReport", "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"}
+{"ts": "2026-11-05T15:29:40+00:00", "runId": "run-20261105-205910-9a30", "kind": "run_finished", "status": "completed", "report": "D:\\workspace\\resilient-orders-platform\\docs\\results\\agent-runs\\run-20261105-205910-9a30.md"}

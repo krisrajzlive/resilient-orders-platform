@@ -1,0 +1,21 @@
+{
+  "text_to_image": {
+    "image_only": {
+      "recall@5": 0.9807692307692307,
+      "mrr": 0.8647435897435898
+    },
+    "caption_only": {
+      "recall@5": 1.0,
+      "mrr": 0.9358974358974359
+    },
+    "fused": {
+      "recall@5": 0.9807692307692307,
+      "mrr": 0.875
+    }
+  },
+  "image_to_image": {
+    "recall@1": 1.0,
+    "recall@5": 1.0,
+    "mrr": 1.0
+  }
+}
