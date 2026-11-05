@@ -18,7 +18,8 @@ and the numbers in [Results](#results) come from those runs.
 | Resilience agents on LangGraph (chaos, triage, drift) | Built, **run live against the deployed saga** |
 | React console (Redux Toolkit, XState) | Built, verified in a browser; **runs orders on the deployed workflow in AWS**, including the human-review step |
 | Auto Scaling, ALB, ECS/Fargate, API Gateway | Not built yet |
-| RDS/Aurora Multi-AZ, backup and restore, disaster recovery drills | Not built yet |
+| RDS Multi-AZ, AWS Backup with cross-region copy | Infrastructure code and tests built, **not deployed**; billable while deployed |
+| Disaster recovery drills (AZ failover, restore, region loss) with measured RTO and data loss | Drill engine and DR agent built and tested against simulated infrastructure; **not yet run on AWS** |
 | CloudFront, AWS Config | Not built yet |
 
 The vector store runs in a local Docker container, not yet on RDS. AWS Health is not available to the lab
@@ -120,6 +121,17 @@ deterministic invariants, not by the model. Each agent has its own tool allowlis
 flag, every call is audited, approvals are checkpointed so a paused run survives a restart, and every agent
 still returns a rule-based result when no model is reachable.
 
+**Disaster-recovery drills** (`projects/orders_langgraph/resilience_agents/dr`). A fourth agent plans and runs three
+drills against the Multi-AZ database, measuring what a failure really costs: *AZ failover* forces the standby to
+take over while numbered writes continue (outage length and any lost acknowledged writes); *backup restore* backs
+up the live database, restores it to a temporary instance and checks the rows and a vector search against the
+source; *region restore* copies the backup to the second region and restores there. Each drill has a time target,
+creates only temporary resources, and deletes them in a `finally` block. The agent refuses to plan when the
+database is not deployed, asks for approval showing the estimated cost and what is billing right now, and always
+finishes with a billing check. Each drill's result is written to the run's audit log the moment the drill ends, so
+a run that is stopped part-way keeps the numbers it already measured. The drills run from the operator's machine because proving data survived means
+querying the database, which a Lambda in AWS could only reach with a NAT gateway.
+
 **Console** (`apps/dashboard`). Redux Toolkit with RTK Query handles API state; XState machines model the search
 lifecycle (retry with backoff, a degraded state, latest query wins) and the order saga, using the same state
 names as the Step Functions workflow. A fault-injection selector sends a header that makes the local API fail a
@@ -209,6 +221,40 @@ npx cdk deploy --outputs-file ../deploy-outputs.local.json
 cd .. && python scripts/run_saga_scenarios.py --profile <profile> --outputs deploy-outputs.local.json
 ```
 
+**Disaster-recovery stacks (billable, opt-in)**
+
+A plain `cdk deploy` only ever deploys the pay-per-use saga stack. The database and backup stacks are added with
+an explicit flag and your address, and cost roughly $0.04 per hour while deployed (the Multi-AZ database):
+
+```bash
+cd infra
+npx cdk bootstrap aws://<account>/us-west-2                       # once, for the second region
+npx cdk deploy OrdersDrVault OrdersData -c dr=true -c dr:allowedCidr=<your public ip>/32
+python ../scripts/cost_guard.py --profile <profile>               # lists anything still billing, in both regions
+```
+
+Tear down in this order. AWS Backup will not delete a vault that still holds recovery points, so empty them first
+(the script is a dry run unless you pass `--apply`, and removes only resources it can positively identify as the
+drills' own):
+
+```bash
+python scripts/dr_cleanup.py --profile <profile>                  # shows what would be removed
+python scripts/dr_cleanup.py --profile <profile> --apply
+cd infra && npx cdk destroy OrdersData OrdersDrVault -c dr=true -c dr:allowedCidr=<your public ip>/32
+python ../scripts/cost_guard.py --profile <profile>               # must report "Nothing billable is running."
+```
+
+The database is created in public subnets so a workstation can reach it without a NAT gateway or VPN; access is
+limited to the single address you pass, over TLS, and ranges broader than a /24 are refused at synthesis time.
+That is a deliberate cost trade-off for short drills, not a production design. Recovery points expire after two
+days, and `scripts/cost_guard.py` exits non-zero while anything billable remains, so it can gate a session.
+
+With the DR stacks deployed, ask the agent to run the drills (it shows the plan and cost and waits for approval):
+
+```bash
+python -m resilience_agents "Run a disaster recovery drill: failover, restore and region loss"
+```
+
 **Run the agents** (omit `--yes` to be asked before the chaos agent acts)
 
 ```bash
@@ -231,6 +277,8 @@ cd infra && npx cdk destroy --force && cd .. && docker compose down
   workflow understands, and starts at most 30 executions per hour per process.
 - Anything that starts an execution is gated by a human approval in code, not by instructions to the model.
 - Reports and audit logs redact account ids and ARNs when written.
+- `scripts/cost_guard.py` lists anything that bills by the hour (databases, NAT gateways, load balancers, idle
+  addresses, recovery points) across regions, and the DR stacks cannot be deployed without an explicit flag.
 
 ## Repository layout
 
