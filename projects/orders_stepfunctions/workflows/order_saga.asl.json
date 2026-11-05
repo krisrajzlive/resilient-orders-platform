@@ -1,0 +1,210 @@
+{
+  "Comment": "Order saga: AI risk check, optional human review, reserve -> charge -> ship, with reverse-order compensation and escalation when compensation fails.",
+  "StartAt": "AssessRisk",
+  "States": {
+    "AssessRisk": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${AssessRiskArn}", "Payload.$": "$" },
+      "ResultSelector": {
+        "level.$": "$.Payload.level",
+        "reasons.$": "$.Payload.reasons",
+        "source.$": "$.Payload.source"
+      },
+      "ResultPath": "$.risk",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.riskError", "Next": "RiskFallback" }],
+      "Next": "RiskChoice"
+    },
+
+    "RiskFallback": {
+      "Type": "Pass",
+      "Comment": "Graceful degradation: if the risk step is unavailable, continue as medium risk instead of blocking orders.",
+      "Result": { "level": "medium", "reasons": ["risk assessment unavailable"], "source": "fallback" },
+      "ResultPath": "$.risk",
+      "Next": "ReserveStock"
+    },
+
+    "RiskChoice": {
+      "Type": "Choice",
+      "Choices": [{ "Variable": "$.risk.level", "StringEquals": "high", "Next": "HumanReview" }],
+      "Default": "ReserveStock"
+    },
+
+    "HumanReview": {
+      "Type": "Task",
+      "Comment": "Pauses until a reviewer calls SendTaskSuccess with {approved: true|false}. No review within an hour rejects the order.",
+      "Resource": "arn:aws:states:::sqs:sendMessage.waitForTaskToken",
+      "Parameters": {
+        "QueueUrl": "${ReviewQueueUrl}",
+        "MessageBody": {
+          "orderId.$": "$.orderId",
+          "amount.$": "$.amount",
+          "reasons.$": "$.risk.reasons",
+          "taskToken.$": "$$.Task.Token"
+        }
+      },
+      "TimeoutSeconds": 3600,
+      "ResultPath": "$.review",
+      "Catch": [{ "ErrorEquals": ["States.Timeout"], "ResultPath": "$.error", "Next": "MarkRejected" }],
+      "Next": "ReviewDecision"
+    },
+
+    "ReviewDecision": {
+      "Type": "Choice",
+      "Choices": [{ "Variable": "$.review.approved", "BooleanEquals": true, "Next": "ReserveStock" }],
+      "Default": "MarkRejected"
+    },
+
+    "ReserveStock": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${ReserveStockArn}", "Payload.$": "$" },
+      "ResultSelector": { "id.$": "$.Payload.id" },
+      "ResultPath": "$.reservation",
+      "Retry": [
+        {
+          "ErrorEquals": ["TransientError", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "MarkRejected" }],
+      "Next": "ChargePayment"
+    },
+
+    "ChargePayment": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${ChargePaymentArn}", "Payload.$": "$" },
+      "ResultSelector": { "id.$": "$.Payload.id" },
+      "ResultPath": "$.payment",
+      "Retry": [
+        {
+          "ErrorEquals": ["TransientError", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "ReleaseStock" }],
+      "Next": "CreateShipment"
+    },
+
+    "CreateShipment": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${CreateShipmentArn}", "Payload.$": "$" },
+      "ResultSelector": { "id.$": "$.Payload.id" },
+      "ResultPath": "$.shipment",
+      "Retry": [
+        {
+          "ErrorEquals": ["TransientError", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "RefundPayment" }],
+      "Next": "MarkConfirmed"
+    },
+
+    "RefundPayment": {
+      "Type": "Task",
+      "Comment": "Compensation. If this keeps failing the order goes to manual review rather than being left inconsistent.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${RefundPaymentArn}", "Payload.$": "$" },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["TransientError", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.compensationError", "Next": "ManualReview" }],
+      "Next": "ReleaseStock"
+    },
+
+    "ReleaseStock": {
+      "Type": "Task",
+      "Comment": "Compensation for ReserveStock.",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": { "FunctionName": "${ReleaseStockArn}", "Payload.$": "$" },
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["TransientError", "Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 1, "MaxAttempts": 3, "BackoffRate": 2, "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.compensationError", "Next": "ManualReview" }],
+      "Next": "MarkRejected"
+    },
+
+    "MarkConfirmed": {
+      "Type": "Pass",
+      "Result": { "status": "CONFIRMED" },
+      "ResultPath": "$.outcome",
+      "Next": "NotifyConfirmed"
+    },
+
+    "NotifyConfirmed": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${OrderEventsTopicArn}",
+        "Subject": "Order confirmed",
+        "Message.$": "States.JsonToString($.outcome)"
+      },
+      "ResultPath": null,
+      "Retry": [{ "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2 }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.notifyError", "Next": "OrderConfirmed" }],
+      "Next": "OrderConfirmed"
+    },
+
+    "OrderConfirmed": { "Type": "Succeed" },
+
+    "MarkRejected": {
+      "Type": "Pass",
+      "Result": { "status": "REJECTED" },
+      "ResultPath": "$.outcome",
+      "Next": "NotifyRejected"
+    },
+
+    "NotifyRejected": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${OrderEventsTopicArn}",
+        "Subject": "Order rejected",
+        "Message.$": "States.JsonToString($.outcome)"
+      },
+      "ResultPath": null,
+      "Retry": [{ "ErrorEquals": ["States.TaskFailed"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2 }],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.notifyError", "Next": "OrderRejected" }],
+      "Next": "OrderRejected"
+    },
+
+    "OrderRejected": { "Type": "Succeed" },
+
+    "ManualReview": {
+      "Type": "Task",
+      "Comment": "Compensation failed: raise an alert for an operator. The execution then fails so it shows up in failure metrics and alarms.",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "${AlertTopicArn}",
+        "Subject": "Order needs manual review",
+        "Message.$": "States.JsonToString($)"
+      },
+      "ResultPath": null,
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.alertError", "Next": "CompensationFailed" }],
+      "Next": "CompensationFailed"
+    },
+
+    "CompensationFailed": {
+      "Type": "Fail",
+      "Error": "CompensationFailed",
+      "Cause": "A compensating step exhausted its retries; the order needs manual review."
+    }
+  }
+}

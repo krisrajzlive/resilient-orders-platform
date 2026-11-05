@@ -1,0 +1,9 @@
+{
+  "name": "resilient-orders-infra",
+  "private": true,
+  "version": "0.1.0",
+  "description": "CDK app tooling for resilient-orders-platform",
+  "devDependencies": {
+    "aws-cdk": "^2.1147.0"
+  }
+}
