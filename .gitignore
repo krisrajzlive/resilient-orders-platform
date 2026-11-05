@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+cdk.out/
+.pytest_cache/
+.aws-sam/
+*.local.json
+capability-matrix.raw.json
+node_modules/
+dist/
+*.tsbuildinfo
+.agent-runs/
